@@ -90,7 +90,8 @@ func (w *Weather) String() string {
 func (w *Weather) Get(city string, date time.Time) {
 	today := time.Now()
 	diff := date.Sub(today).Round(time.Hour).Hours() / 24
-	util.Logger("Diff:", diff)
+
+	// util.Logger("Time Diff:", diff)
 
 	// Check time is within the next 7 days or more
 	switch {
