@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	_weatherURLGoogle        = "https://www.google.com/search?q=%s%%20weather&hl=en"
+	_weatherURLGoogle        = "https://www.google.com/search?q=%s+weather&hl=en"
 	_weatherURLApixuForecast = "https://api.apixu.com/v1/forecast.json?key=%s&q=%s&days=10&"
 	_weatherURLApixuHistory  = "https://api.apixu.com/v1/history.json?key=%s&q=%s&dt=%s"
 
@@ -52,9 +52,9 @@ type Weather struct {
 	Wind          string
 	Precipitation string
 	Humidity      string
-	Sub           []SubWeather
 	NotAvailable  bool // Whether the data souce is historical and currently not available
 	Emoji         string
+	Sub           []SubWeather
 }
 
 // SubWeather contains a summary/brief weather
@@ -87,7 +87,7 @@ func (w *Weather) String() string {
 
 // Get retrieves the forecast on varrying sources
 // based on the date given
-func (w *Weather) Get(city string, date time.Time) {
+func (w *Weather) Get(city string, date time.Time) error {
 	today := time.Now()
 	diff := date.Sub(today).Round(time.Hour).Hours() / 24
 
@@ -98,7 +98,7 @@ func (w *Weather) Get(city string, date time.Time) {
 
 	// Forecast and Historical data should be cached.
 	case diff > 10: // > 10 apixu historical
-		util.Red("FROM APIXU-HISTORY")
+		util.Logger("Using Apixu Historical API")
 
 		// Free accounts can only access 7 days prior
 		// data.
@@ -107,16 +107,18 @@ func (w *Weather) Get(city string, date time.Time) {
 		// Set not available flag
 		w.NotAvailable = true
 	case diff > 8: // > 7 apixu forecast
-		util.Green("FROM APIXU-FORECAST")
-		w.GetPixuForecast(city)
+		util.Logger("Using Apixu Forecast API")
+		return w.GetPixuForecast(city)
 	default: // If within the next 7 days used google weather results
-		util.Green("FROM GOOGLE")
-		w.GetGoogle(city)
+		util.Logger("Using Google Search")
+		return w.GetGoogle(city)
 	}
+
+	return nil
 }
 
 // GetPixuForecast ...
-func (w *Weather) GetPixuForecast(city string) {
+func (w *Weather) GetPixuForecast(city string) error {
 	//url encode city
 	city = url.QueryEscape(city)
 
@@ -125,7 +127,7 @@ func (w *Weather) GetPixuForecast(city string) {
 		_apixuKey, city)
 
 	// Query
-	w.GetPixu(path)
+	return w.GetPixu(path)
 }
 
 // GetPixuHistorical ...
@@ -146,15 +148,19 @@ func (w *Weather) GetPixuHistorical(city string, date time.Time) {
 }
 
 // GetPixu ...
-func (w *Weather) GetPixu(cleanPath string) {
+func (w *Weather) GetPixu(cleanPath string) error {
 	req, err := http.NewRequest("GET", cleanPath, nil)
-	util.Catch(err)
+	if err != nil {
+		return ParseError("Unable to create new request from " + cleanPath + ", " + err.Error())
+	}
 
 	//set user-agent
 	req.Header.Set("user-agent", _desktopUserAgent)
 
 	res, err := w.client.Do(req)
-	util.HTTPCatch(res, err, "Unable to fetch data from url:", cleanPath)
+	if err != nil {
+		return ParseError("Unable to fetch data from url:" + cleanPath + ", " + err.Error())
+	}
 
 	/***Debugging: Dump response***
 	b, err := ioutil.ReadAll(res.Body)
@@ -164,8 +170,7 @@ func (w *Weather) GetPixu(cleanPath string) {
 	/****/
 
 	//Parse the html data
-	err = w.parsePixu(res.Body)
-	util.Catch(err)
+	return w.parsePixu(res.Body)
 }
 
 func (w *Weather) parsePixu(body io.ReadCloser) error {
@@ -173,11 +178,15 @@ func (w *Weather) parsePixu(body io.ReadCloser) error {
 
 	// Unmarshal the data
 	b, err := ioutil.ReadAll(body)
-	util.Catch(err)
+	if err != nil {
+		return ParseError("Unable to read response body. " + err.Error())
+	}
 
 	pixu := &Apixu{}
 	err = json.Unmarshal(b, pixu)
-	util.Catch(err, "Unable to parse Apixu json data: ", string(b))
+	if err != nil {
+		return ParseError("Unable to parse Apixu json data, " + string(b) + ", " + err.Error())
+	}
 
 	/*
 		Location      string
@@ -204,51 +213,25 @@ func (w *Weather) parsePixu(body io.ReadCloser) error {
 	return nil
 }
 
-func (w *Weather) getEmoji(condition string) string {
-	emoji := "<<emoji_here>>"
-
-	// Convert to lowercase
-	condition = strings.ToLower(condition)
-	switch {
-	case strings.Contains(condition, "clear"):
-		fallthrough
-	case strings.Contains(condition, "sun"): //sunny, cloudy-sunny
-		if strings.Contains(condition, "cloud") {
-			emoji = emojiMap["cloudy-sunny"]
-		} else {
-			emoji = emojiMap["sunny"]
-		}
-	case strings.Contains(condition, "rain"): //rain, cloudy-rain
-		if strings.Contains(condition, "cloud") {
-			emoji = emojiMap["cloudy-rain"]
-		} else {
-			emoji = emojiMap["rain"]
-		}
-	case strings.Contains(condition, "cloud"): //thunder
-		emoji = emojiMap["cloudy"]
-	case strings.Contains(condition, "thunder"): //thunder
-		emoji = emojiMap["thunder"]
-	case strings.Contains(condition, "snow"): //snow
-		emoji = emojiMap["snow"]
-	}
-	return emoji
-}
-
 //GetGoogle retrieves the latest weather data
 //from google
-func (w *Weather) GetGoogle(city string) {
+func (w *Weather) GetGoogle(city string) error {
 	//url encode city
 	city = url.QueryEscape(city)
 
 	path := fmt.Sprintf(_weatherURLGoogle, city)
 	req, err := http.NewRequest("GET", path, nil)
-	util.Catch(err)
+	if err != nil {
+		return ParseError("Unable to create new request from " + path + ", " + err.Error())
+	}
 
 	//set user-agent
 	req.Header.Set("user-agent", _desktopUserAgent)
 
 	res, err := w.client.Do(req)
-	util.HTTPCatch(res, err, "Unable to fetch data from url:", path)
+	if err != nil {
+		return ParseError("Unable fetch weather data from " + path + ", " + err.Error())
+	}
 
 	/***Debugging***
 	//read the response body
@@ -259,9 +242,7 @@ func (w *Weather) GetGoogle(city string) {
 	/****/
 
 	//Parse the html data
-	err = w.parseGoogle(res.Body)
-	util.Catch(err)
-
+	return w.parseGoogle(res.Body)
 }
 
 //parseGoogle function may change a lot of times due to
@@ -272,11 +253,12 @@ func (w *Weather) parseGoogle(body io.ReadCloser) error {
 
 	// Load the HTML document
 	doc, err := goquery.NewDocumentFromReader(body)
-	util.Catch(err, "Unable to parse the HTML string.")
+	if err != nil {
+		return ParseError("Unable to parse the HTML string." + err.Error())
+	}
 
 	// Check first if the parent container exist
 	len := doc.Find(_container).Length()
-	//util.Logger("length: ", len)
 
 	//get data if container exists
 	if len == 1 {
@@ -355,6 +337,35 @@ func (w *Weather) parseGoogle(body io.ReadCloser) error {
 		return nil
 	}
 
-	return fmt.Errorf("Error in parsing the HTML string, container %s does not exist",
-		_container)
+	return ParseError(fmt.Sprintf("Error in parsing the HTML string, container %s does not exist", _container))
+}
+
+func (w *Weather) getEmoji(condition string) string {
+	emoji := "<<emoji_here>>"
+
+	// Convert to lowercase
+	condition = strings.ToLower(condition)
+	switch {
+	case strings.Contains(condition, "clear"):
+		fallthrough
+	case strings.Contains(condition, "sun"): //sunny, cloudy-sunny
+		if strings.Contains(condition, "cloud") {
+			emoji = emojiMap["cloudy-sunny"]
+		} else {
+			emoji = emojiMap["sunny"]
+		}
+	case strings.Contains(condition, "rain"): //rain, cloudy-rain
+		if strings.Contains(condition, "cloud") {
+			emoji = emojiMap["cloudy-rain"]
+		} else {
+			emoji = emojiMap["rain"]
+		}
+	case strings.Contains(condition, "cloud"): //thunder
+		emoji = emojiMap["cloudy"]
+	case strings.Contains(condition, "thunder"): //thunder
+		emoji = emojiMap["thunder"]
+	case strings.Contains(condition, "snow"): //snow
+		emoji = emojiMap["snow"]
+	}
+	return emoji
 }

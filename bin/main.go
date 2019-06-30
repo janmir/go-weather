@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"fmt"
 	weather "go-weather/pkg"
 	"time"
@@ -9,6 +10,9 @@ import (
 func main() {
 	w := weather.New()
 	future := time.Now().Add(time.Hour * 24 * 7)
-	w.Get("Nishikubocho", future)
+	err := w.Get("Nishikubocho", future)
+	if err != nil{
+		log.Fatal(err)
+	}
 	fmt.Printf("%+v", w)
 }
